@@ -20,9 +20,9 @@ export default defineConfig({
         background_color: '#f8fafc',
         display: 'standalone',
         orientation: 'portrait',
-        id: '/',
-        scope: '/',
-        start_url: '/',
+        id: '/lottery-app/',
+        scope: '/lottery-app/',
+        start_url: '/lottery-app/',
         icons: [
           {
             src: '/icons/icon-192.png',
