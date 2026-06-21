@@ -308,6 +308,32 @@ try {
 
 ---
 
+### GitHub Pages 子路徑導致靜態檔案 Fetch 404
+
+#### 問題描述
+
+在本地開發時使用絕對路徑 `/data/lottery_history.csv` 正常，但部署到 GitHub Pages 子路徑（如 `/lottery-app/`）後，瀏覽器會直接向根域名請求該檔案，導致 404 錯誤，進而引發前端判定為離線或檔案不存在（明牌模式顯示「無法載入歷史資料」）。
+
+#### 根本原因
+
+絕對路徑 `/` 忽略了 Vite 經由 `base` 配置打包出的專案子路徑。`fetch('/data/...')` 一律解析到網域根目錄 `https://<user>.github.io/data/...`，而檔案實際位於 `https://<user>.github.io/lottery-app/data/...`。
+
+#### 解決方案
+
+在 `useLotteryTrends.js` 中將 `CSV_URL` 改為使用 Vite 內建的動態環境變數：
+
+```js
+// 錯誤：寫死絕對路徑，子路徑部署後 404
+const CSV_URL = '/data/lottery_history.csv';
+
+// 正確：以 BASE_URL 動態適應部署子路徑
+const CSV_URL = `${import.meta.env.BASE_URL}data/lottery_history.csv`;
+```
+
+`import.meta.env.BASE_URL` 由 Vite 於 build 時依 `vite.config.js` 的 `base` 設定替換。此做法能完美相容本地開發（解析為 `/`）與雲端生產環境（解析為 `/lottery-app/`）。所有 fetch 靜態資源的路徑都應比照此模式，避免硬編碼絕對路徑。
+
+---
+
 ## 檔案結構
 
 ```
