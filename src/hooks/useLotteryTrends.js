@@ -11,7 +11,8 @@ import Papa from 'papaparse';
  * 所有指標僅反映歷史統計，不預測未來。
  */
 
-const CSV_URL = '/data/lottery_history.csv';
+// 使用 BASE_URL 動態適應子路徑部署（GitHub Pages 為 /lottery-app/）
+const CSV_URL = `${import.meta.env.BASE_URL}data/lottery_history.csv`;
 const RECENT_WINDOW = 30; // 熱門度計算視窗（期數）
 
 function computeTrends(draws) {
