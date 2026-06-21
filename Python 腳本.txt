@@ -1,0 +1,92 @@
+Claude，我們現在要實作 CLAUDE.md 待辦清單中的『明牌模式（歷史趨勢分析）』。請你嚴格按照以下兩個階段執行任務，必須等階段一成功完成並產出檔案後，才能進入階段二。
+
+【階段一：建立與執行爬蟲】
+
+請在專案根目錄建立 scraper.py，並寫入我下方提供的 Python 程式碼。
+
+幫我在終端機執行 pip install requests beautifulsoup4 來安裝相依套件。
+
+幫我在終端機執行 python scraper.py。
+
+檢查專案目錄（或 /public/data/）是否成功產出了 lottery_history.csv。如果報錯，請自行分析錯誤訊息並修正 scraper.py 直到成功抓到資料為止。
+
+【階段二：前端趨勢指標實作】
+
+確認 CSV 存在後，請先讀取 CLAUDE.md，確保你理解『公平性優先』的設計紅線（絕不能用『中獎機率』字眼）。
+
+在終端機執行 npm install papaparse。
+
+建立 useLotteryTrends hook，負責在 App 載入時去 fetch 這個靜態的 CSV 並解析。
+
+修改 PowerLotteryApp.jsx，設計『熱門度』與『遺漏值』的演算法，並在畫面上新增『📊 趨勢指標』區塊。
+
+以下是 scraper.py 的程式碼：
+
+import requests
+from bs4 import BeautifulSoup
+import csv
+import re
+
+def scrape_lottery_data(url, output_file='lottery_history.csv', limit=20):
+    """
+    爬取威力彩歷史號碼並輸出為 CSV
+    """
+    headers = {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
+    }
+    
+    try:
+        response = requests.get(url, headers=headers)
+        response.encoding = 'utf-8' # 確保中文編碼正確
+        response.raise_for_status()
+        
+        soup = BeautifulSoup(response.text, 'html.parser')
+        
+        # 觀察目標網站的表格結構 (需根據實際 HTML 微調)
+        # 假設資料都在一個 <table> 中，且有特定的 class 或 id
+        # 這裡提供一個通用的解析邏輯框架
+        tables = soup.find_all('table')
+        
+        if not tables:
+             print("未找到資料表格。請檢查網頁結構。")
+             return
+             
+        # 通常包含號碼的會是資料列最多的表格
+        target_table = sorted(tables, key=lambda t: len(t.find_all('tr')), reverse=True)[0]
+        rows = target_table.find_all('tr')
+        
+        data = []
+        for row in rows[1:]: # 略過標題列
+            cols = row.find_all('td')
+            if len(cols) >= 3: # 確保有足夠的欄位 (期別, 號碼, 特號)
+                draw_id = cols[0].text.strip()
+                numbers_str = cols[1].text.strip()
+                special_str = cols[2].text.strip()
+                
+                # 使用正則表達式提取所有數字
+                # 假設格式為 "01, 05, 12, 18, 22, 35"
+                first_zone = re.findall(r'\d+', numbers_str)
+                second_zone = re.findall(r'\d+', special_str)
+                
+                if len(first_zone) == 6 and len(second_zone) == 1:
+                    row_data = [draw_id] + first_zone + second_zone
+                    data.append(row_data)
+                    
+                if len(data) >= limit:
+                    break
+                    
+        # 寫入 CSV
+        headers = ['Draw_ID', 'N1', 'N2', 'N3', 'N4', 'N5', 'N6', 'Special']
+        with open(output_file, 'w', newline='', encoding='utf-8') as f:
+            writer = csv.writer(f)
+            writer.writerow(headers)
+            writer.writerows(data)
+            
+        print(f"成功爬取 {len(data)} 期資料並儲存至 {output_file}")
+        
+    except Exception as e:
+        print(f"爬取失敗: {e}")
+
+# 目標 URL
+url = "https://www.pilio.idv.tw/lto/list.asp" # 注意：此網站可能是大樂透，威力彩可能是另一個參數。請確認該頁面是威力彩。
+scrape_lottery_data(url, limit=20)
