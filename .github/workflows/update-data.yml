@@ -1,0 +1,33 @@
+name: Weekly Lottery Data Update
+
+# 每週二、週五 台北時間 09:00（UTC 01:00）自動更新威力彩資料並重新發布
+on:
+  schedule:
+    - cron: '0 1 * * 2,5'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  update-and-deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Install dependencies
+        run: npm install --legacy-peer-deps
+
+      - name: Configure Git identity
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+      - name: Scrape, build & deploy to gh-pages
+        run: npm run deploy
