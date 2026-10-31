@@ -88,10 +88,9 @@ function computeTrends(draws) {
 
 export function useLotteryTrends() {
   const [rawDraws, setRawDraws] = useState([]);
-  const [status, setStatus] = useState('idle'); // idle | loading | ready | offline
+  const [status, setStatus] = useState('loading'); // loading | ready | offline
 
   useEffect(() => {
-    setStatus('loading');
     fetch(CSV_URL)
       .then(res => {
         if (!res.ok) throw new Error(`HTTP ${res.status}`);

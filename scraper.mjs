@@ -46,7 +46,7 @@ async function main() {
   console.log('[scraper] 開始抓取台灣彩券官方威力彩資料...');
   console.log(`[scraper] 來源：${API}\n`);
 
-  // 今天是 2026-05，往前抓 15 個月確保取得 >= 100 期
+  // 從當月往前抓 14 個月（共 15 個月，約 130 期），確保取得 >= 100 期
   const today = new Date();
   const endYear = today.getFullYear();
   const endMonth = today.getMonth() + 1;
@@ -59,6 +59,7 @@ async function main() {
   console.log(`[scraper] 查詢範圍：${months[0]} ~ ${months[months.length - 1]}（共 ${months.length} 個月）\n`);
 
   const allDraws = [];
+  const failedMonths = [];
   for (const month of months) {
     try {
       const draws = await fetchMonth(month);
@@ -66,6 +67,7 @@ async function main() {
       allDraws.push(...draws);
     } catch (e) {
       console.log(`  ${month}: 失敗 (${e.message})`);
+      failedMonths.push(month);
     }
     // 避免打太快
     await new Promise(r => setTimeout(r, 200));
@@ -86,12 +88,18 @@ async function main() {
     const nums = d.drawNumberSize;
     return Array.isArray(nums) && nums.length === 7 &&
       nums.slice(0, 6).every(n => n >= 1 && n <= 38) &&
-      nums[6] >= 1 && nums[6] <= 8;
+      nums[6] >= 1 && nums[6] <= 8 &&
+      typeof d.lotteryDate === 'string';
   });
   console.log(`[scraper] 格式驗證通過：${valid.length} 期`);
 
-  if (valid.length === 0) {
-    console.error('[scraper] 沒有有效資料，終止。');
+  // 資料不完整時保留舊 CSV，避免用殘缺資料覆蓋掉好資料（熱門度／遺漏值會失真）
+  if (failedMonths.length > 0) {
+    console.error(`[scraper] 有 ${failedMonths.length} 個月份抓取失敗（${failedMonths.join(', ')}），保留現有 CSV，終止。`);
+    process.exit(1);
+  }
+  if (valid.length < TARGET_COUNT) {
+    console.error(`[scraper] 有效資料只有 ${valid.length} 期（需要 ${TARGET_COUNT} 期），保留現有 CSV，終止。`);
     process.exit(1);
   }
 

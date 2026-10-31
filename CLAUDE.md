@@ -32,7 +32,7 @@
 
 | 層級 | 技術 |
 |------|------|
-| 框架 | React 18 + Vite 8 |
+| 框架 | React 19 + Vite 8 |
 | 樣式 | Tailwind CSS v4（`@tailwindcss/vite` 插件）|
 | 圖示庫 | lucide-react |
 | PWA | vite-plugin-pwa 1.2（workbox generateSW 模式）|
@@ -140,6 +140,7 @@ https://api.taiwanlottery.com/TLCAPIWeB/Lottery/SuperLotto638Result
 - 查詢範圍：當月往前推 14 個月（約 15 個月），確保取得 ≥ 100 期
 - 每月間隔 200ms 請求，避免打太快
 - 結果去重後依期別排序，保留最近 100 期
+- **資料不完整保護**：任一月份抓取失敗，或有效資料不足 100 期時，以 exit code 1 結束並保留現有 CSV（避免網路不穩時用殘缺資料覆蓋好資料）
 - 輸出格式：`public/data/lottery_history.csv`（`Draw_ID, Date, N1-N6, Special`）
   - `Date` 欄位（2026-06 新增）：開獎日期 `YYYY-MM-DD`，取自 API 的 `lotteryDate`
 - 換入真實資料只需覆蓋 CSV，欄位格式對齊即可
@@ -155,7 +156,7 @@ https://api.taiwanlottery.com/TLCAPIWeB/Lottery/SuperLotto638Result
 | 執行內容 | `powershell.exe -NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File update-data.ps1` |
 | 執行紀錄 | 附加寫入 `lottery-app/scrape.log` |
 
-`update-data.ps1` 以 `$PSScriptRoot` 定位專案目錄（腳本內容不含中文路徑，避免 PowerShell 5.1 編碼問題），再執行 `node scraper.mjs`。
+`update-data.ps1` 以 `$PSScriptRoot` 定位專案目錄（腳本內容不含中文路徑，避免 PowerShell 5.1 編碼問題），再執行 `node scraper.mjs`。腳本開頭設 `[Console]::OutputEncoding = UTF8`，並以 `node scraper.mjs 2>&1 | Out-File -Encoding utf8` 寫入紀錄（舊版 `*>>` 會寫成 UTF-16，造成 `scrape.log` 中文全變亂碼；舊紀錄保留在 `scrape.old.log`）。
 
 **修改方式：** `taskschd.msc` → 工作排程器程式庫 → `LotteryDataUpdate` → 「動作」分頁改路徑、「觸發程序」分頁改時間；或用 PowerShell `Set-ScheduledTask`。
 
@@ -185,7 +186,7 @@ https://api.taiwanlottery.com/TLCAPIWeB/Lottery/SuperLotto638Result
 ```js
 VitePWA({
   registerType: 'autoUpdate',
-  includeAssets: ['favicon.ico', 'icons/*.png'],
+  includeAssets: ['favicon.svg', 'icons/*.png'],
   manifest: {
     name: '台灣威力彩幸運產生器',
     short_name: '威力彩',
@@ -194,13 +195,13 @@ VitePWA({
     background_color: '#f8fafc',
     display: 'standalone',
     orientation: 'portrait',
-    id: '/',
-    scope: '/',
-    start_url: '/',
+    id: '/lottery-app/',
+    scope: '/lottery-app/',
+    start_url: '/lottery-app/',
     icons: [
-      { src: '/icons/icon-192.png', sizes: '192x192', type: 'image/png', purpose: 'any' },
-      { src: '/icons/icon-512.png', sizes: '512x512', type: 'image/png', purpose: 'any' },
-      { src: '/icons/icon-512.png', sizes: '512x512', type: 'image/png', purpose: 'maskable' },
+      { src: 'icons/icon-192.png', sizes: '192x192', type: 'image/png', purpose: 'any' },
+      { src: 'icons/icon-512.png', sizes: '512x512', type: 'image/png', purpose: 'any' },
+      { src: 'icons/icon-512.png', sizes: '512x512', type: 'image/png', purpose: 'maskable' },
     ],
   },
   workbox: {
@@ -210,6 +211,8 @@ VitePWA({
 ```
 
 CSV 已納入 `globPatterns`，Workbox 會將歷史資料快取供離線使用。
+
+> `vite.config.js` 設有 `base: '/lottery-app/'`（GitHub Pages 子路徑），因此 `id/scope/start_url` 都帶子路徑；icons 的 `src` 必須用**相對路徑**（相對 `manifest.webmanifest` 解析），寫成 `/icons/...` 會指到網域根目錄而 404，安裝後的 App 沒有圖示。
 
 ### 為什麼 purpose 必須拆分為兩個獨立項目
 
@@ -334,6 +337,22 @@ const CSV_URL = `${import.meta.env.BASE_URL}data/lottery_history.csv`;
 
 ---
 
+### localStorage 歷史紀錄在開發模式被清空
+
+#### 問題描述
+
+開發模式（`npm run dev`）每次重新整理頁面，生成紀錄都會消失。
+
+#### 根本原因
+
+舊寫法用兩個 `useEffect`：一個讀取 localStorage 再 `setHistory`，一個在 `history` 變動時寫回。初次 render 時 `history` 是 `[]`，「寫回」effect 會先把 `[]` 存進 localStorage；`<StrictMode>` 在開發模式又會重跑一次 effect，第二次讀取就讀到空陣列，最後的 state 是 `[]`。
+
+#### 解法
+
+改用 `useState(loadHistory)` 惰性初始值，在第一次 render 前就同步讀好，刪掉讀取用的 effect；寫回時包 `try/catch`，避免超過 localStorage 容量時整頁崩潰。
+
+---
+
 ## 檔案結構
 
 ```
@@ -363,6 +382,8 @@ lottery-app/
 ---
 
 ## 開發指令
+
+本機一鍵啟動：雙擊上層資料夾的 `啟動 威力彩.bat`（更新資料 → build → `vite preview`），固定網址 `http://localhost:41738/lottery-app/`。爬蟲失敗時沿用舊資料繼續啟動。
 
 ```bash
 # 開發模式：自動抓取最新開獎資料，再啟動 localhost
@@ -409,6 +430,8 @@ node generate-icons.mjs
 - [x] npm run dev 自動更新資料後啟動伺服器
 - [x] 明牌模式顯示最新一期開獎號碼（含開獎日期）
 - [x] Windows 工作排程器 `LotteryDataUpdate`：每週二、五 09:00 自動執行爬蟲更新資料
+- [x] 趨勢指標（熱門度／遺漏值）CSV 匯出
+- [x] 本機一鍵啟動 `啟動 威力彩.bat`（固定 port 41738）
 
 ### 待辦
 

@@ -18,6 +18,101 @@ function gapColor(gap) {
   return 'text-slate-400';
 }
 
+const HISTORY_KEY = 'powerLotteryHistory';
+const MAX_COUNT = 999; // 單次產生組數上限
+
+// 讀取歷史紀錄（useState 初始值，只讀一次，避免 effect 先把空陣列寫回 localStorage）
+function loadHistory() {
+  try {
+    const saved = JSON.parse(localStorage.getItem(HISTORY_KEY));
+    return Array.isArray(saved) ? saved : [];
+  } catch {
+    return [];
+  }
+}
+
+// 解析組數輸入：非數字或 < 1 視為 1，超過上限截斷為 MAX_COUNT
+function parseCount(value) {
+  const n = parseInt(value);
+  if (isNaN(n) || n < 1) return 1;
+  return Math.min(n, MAX_COUNT);
+}
+
+// 高質量隨機數生成函數
+// 拒絕抽樣：消除模數偏差，確保每個值機率完全相等
+const secureRandomInt = (max) => {
+  // 計算 2^32 中可整除 max 的最大上界
+  // 超過此上界的值一律捨棄重抽，避免低編號被多選到
+  const limit = Math.floor(0x100000000 / max) * max;
+  const buf = new Uint32Array(1);
+  do {
+    window.crypto.getRandomValues(buf);
+  } while (buf[0] >= limit);
+  return buf[0] % max;
+};
+
+// Fisher-Yates 洗牌 + 拒絕抽樣，確保每次抽取為獨立事件
+const secureRandomSample = (min, max, count) => {
+  const pool = Array.from({ length: max - min + 1 }, (_, i) => i + min);
+  for (let i = pool.length - 1; i > 0; i--) {
+    const j = secureRandomInt(i + 1);
+    [pool[i], pool[j]] = [pool[j], pool[i]];
+  }
+  return pool.slice(0, count).sort((a, b) => a - b);
+};
+
+// 從「使用者自訂候選池」中無偏差抽樣 count 個
+// 同樣使用 Fisher-Yates + secureRandomInt（拒絕抽樣），嚴禁 Math.random
+const secureSampleFromPool = (pool, count) => {
+  const arr = [...pool];
+  for (let i = arr.length - 1; i > 0; i--) {
+    const j = secureRandomInt(i + 1);
+    [arr[i], arr[j]] = [arr[j], arr[i]];
+  }
+  return arr.slice(0, count).sort((a, b) => a - b);
+};
+
+// 號碼球組件（定義在元件外，避免每次 render 重建導致縮放動畫失效）
+const Ball = ({ num, type, animate, size = 'normal' }) => {
+  const isZoneB = type === 'zoneB';
+  const isSmall = size === 'small';
+
+  let sizeClasses = "w-12 h-12 sm:w-14 sm:h-14 text-lg sm:text-xl"; // Normal
+  if (isSmall) sizeClasses = "w-8 h-8 text-sm"; // Small for stats
+
+  const baseClasses = `${sizeClasses} rounded-full flex items-center justify-center font-bold shadow-lg transform transition-all duration-300`;
+
+  const colorClasses = isZoneB
+    ? "bg-gradient-to-br from-red-500 to-red-700 text-white border-2 border-red-300"
+    : "bg-gradient-to-br from-emerald-400 to-emerald-600 text-white border-2 border-emerald-200";
+
+  return (
+    <div className={`${baseClasses} ${colorClasses} ${animate ? 'scale-110' : 'scale-100'}`}>
+      {num || '?'}
+    </div>
+  );
+};
+
+// 趨勢指標（熱門度 & 遺漏值）CSV 下載
+function downloadTrendsCSV(trends) {
+  if (!trends) return;
+
+  const headers = ['區別', '號碼', '熱門度', `近${trends.window}期出現次數`, '遺漏值(距上次出現期數)'];
+  const rowsA = Object.entries(trends.zoneA).map(([n, info]) => ['第一區', n, info.hotness, info.count, info.gap]);
+  const rowsB = Object.entries(trends.zoneB).map(([n, info]) => ['第二區', n, info.hotness, info.count, info.gap]);
+
+  const csvContent = "data:text/csv;charset=utf-8,\uFEFF"
+    + [headers.join(','), ...rowsA.map(r => r.join(',')), ...rowsB.map(r => r.join(','))].join('\n');
+
+  const encodedUri = encodeURI(csvContent);
+  const link = document.createElement('a');
+  link.setAttribute('href', encodedUri);
+  link.setAttribute('download', `威力彩趨勢指標_${new Date().toISOString().slice(0, 10)}.csv`);
+  document.body.appendChild(link);
+  link.click();
+  document.body.removeChild(link);
+}
+
 // 趨勢指標區塊
 function TrendsSection({ trends, status, show, onToggle }) {
   const headerContent = () => {
@@ -82,6 +177,17 @@ function TrendsSection({ trends, status, show, onToggle }) {
 
           {status === 'ready' && trends && (
             <>
+              {/* 下載趨勢資料 CSV */}
+              <div className="flex justify-end">
+                <button
+                  onClick={() => downloadTrendsCSV(trends)}
+                  className="text-xs text-emerald-600 hover:text-emerald-700 flex items-center px-3 py-1.5 rounded-full bg-emerald-50 hover:bg-emerald-100 transition-colors border border-emerald-200"
+                  title="下載熱門度 & 遺漏值 CSV 檔案"
+                >
+                  <Download className="w-3.5 h-3.5 mr-1" /> 匯出熱門度/遺漏值 CSV
+                </button>
+              </div>
+
               {/* 最新一期開獎號碼 */}
               {trends.latestDraw && (
                 <div className="bg-slate-50 border border-slate-200 rounded-xl p-4">
@@ -222,7 +328,7 @@ const PowerLotteryApp = () => {
     zoneA: [null, null, null, null, null, null],
     zoneB: null,
   });
-  const [history, setHistory] = useState([]);
+  const [history, setHistory] = useState(loadHistory);
   const [isAnimating, setIsAnimating] = useState(false);
   const [copySuccess, setCopySuccess] = useState(null);
   const [generateCount, setGenerateCount] = useState(1);
@@ -235,59 +341,20 @@ const PowerLotteryApp = () => {
   const [customCount, setCustomCount] = useState(1);
   const { trends, status: trendsStatus } = useLotteryTrends();
 
-  // 初始化時讀取歷史紀錄
+  // 保存歷史紀錄（超過 localStorage 容量時不讓整個頁面崩潰）
   useEffect(() => {
-    const savedHistory = localStorage.getItem('powerLotteryHistory');
-    if (savedHistory) {
-      setHistory(JSON.parse(savedHistory));
+    try {
+      localStorage.setItem(HISTORY_KEY, JSON.stringify(history));
+    } catch (e) {
+      console.warn('[history] localStorage 寫入失敗，紀錄僅保留在本次開啟期間', e);
     }
-  }, []);
-
-  // 保存歷史紀錄
-  useEffect(() => {
-    localStorage.setItem('powerLotteryHistory', JSON.stringify(history));
   }, [history]);
-
-  // 高質量隨機數生成函數
-  // 拒絕抽樣：消除模數偏差，確保每個值機率完全相等
-  const secureRandomInt = (max) => {
-    // 計算 2^32 中可整除 max 的最大上界
-    // 超過此上界的值一律捨棄重抽，避免低編號被多選到
-    const limit = Math.floor(0x100000000 / max) * max;
-    const buf = new Uint32Array(1);
-    do {
-      window.crypto.getRandomValues(buf);
-    } while (buf[0] >= limit);
-    return buf[0] % max;
-  };
-
-  // Fisher-Yates 洗牌 + 拒絕抽樣，確保每次抽取為獨立事件
-  const secureRandomSample = (min, max, count) => {
-    const pool = Array.from({ length: max - min + 1 }, (_, i) => i + min);
-    for (let i = pool.length - 1; i > 0; i--) {
-      const j = secureRandomInt(i + 1);
-      [pool[i], pool[j]] = [pool[j], pool[i]];
-    }
-    return pool.slice(0, count).sort((a, b) => a - b);
-  };
-
-  // 從「使用者自訂候選池」中無偏差抽樣 count 個
-  // 同樣使用 Fisher-Yates + secureRandomInt（拒絕抽樣），嚴禁 Math.random
-  const secureSampleFromPool = (pool, count) => {
-    const arr = [...pool];
-    for (let i = arr.length - 1; i > 0; i--) {
-      const j = secureRandomInt(i + 1);
-      [arr[i], arr[j]] = [arr[j], arr[i]];
-    }
-    return arr.slice(0, count).sort((a, b) => a - b);
-  };
 
   const generateNumbers = () => {
     if (isAnimating) return;
 
     // 簡單驗證輸入
-    let count = parseInt(generateCount);
-    if (isNaN(count) || count < 1) count = 1;
+    const count = parseCount(generateCount);
     if (count > 500) {
         if(!window.confirm(`一次生成 ${count} 組可能會花費一點時間，確定要繼續嗎？`)) return;
     }
@@ -299,8 +366,8 @@ const PowerLotteryApp = () => {
     const maxFrames = 20;
 
     const intervalId = setInterval(() => {
-      const tempA = Array.from({ length: 6 }, () => Math.floor(Math.random() * 38) + 1);
-      const tempB = Math.floor(Math.random() * 8) + 1;
+      const tempA = Array.from({ length: 6 }, () => secureRandomInt(38) + 1);
+      const tempB = secureRandomInt(8) + 1;
 
       setCurrentDraw({ zoneA: tempA, zoneB: tempB });
       frames++;
@@ -329,7 +396,8 @@ const PowerLotteryApp = () => {
     }
 
     setCurrentDraw({ zoneA: newDraws[0].zoneA, zoneB: newDraws[0].zoneB });
-    setHistory(newDraws);
+    // 加入（prepend）至既有歷史紀錄，不覆蓋先前產生的號碼
+    setHistory((prev) => [...newDraws, ...prev]);
     setIsAnimating(false);
   };
 
@@ -360,8 +428,7 @@ const PowerLotteryApp = () => {
       return;
     }
 
-    let count = parseInt(customCount);
-    if (isNaN(count) || count < 1) count = 1;
+    const count = parseCount(customCount);
     if (count > 500) {
       if (!window.confirm(`一次組合 ${count} 組可能會花費一點時間，確定要繼續嗎？`)) return;
     }
@@ -372,8 +439,8 @@ const PowerLotteryApp = () => {
     let frames = 0;
     const maxFrames = 20;
     const intervalId = setInterval(() => {
-      const tempA = Array.from({ length: 6 }, () => customPoolA[Math.floor(Math.random() * customPoolA.length)]);
-      const tempB = customPoolB[Math.floor(Math.random() * customPoolB.length)];
+      const tempA = Array.from({ length: 6 }, () => customPoolA[secureRandomInt(customPoolA.length)]);
+      const tempB = customPoolB[secureRandomInt(customPoolB.length)];
       setCurrentDraw({ zoneA: tempA, zoneB: tempB });
       frames++;
       if (frames >= maxFrames) {
@@ -415,10 +482,30 @@ const PowerLotteryApp = () => {
 
   const copyToClipboard = (draw) => {
     const text = `威力彩選號:\nA區: ${draw.zoneA.join(', ')}\nB區: ${draw.zoneB}`;
-    navigator.clipboard.writeText(text).then(() => {
+    const onCopied = () => {
       setCopySuccess(draw.id);
       setTimeout(() => setCopySuccess(null), 2000);
-    });
+    };
+
+    // 非 HTTPS（例如用區網 IP 開啟）時沒有 clipboard API，改用舊式 execCommand
+    const fallbackCopy = () => {
+      const textarea = document.createElement('textarea');
+      textarea.value = text;
+      textarea.style.position = 'fixed';
+      textarea.style.opacity = '0';
+      document.body.appendChild(textarea);
+      textarea.select();
+      const ok = document.execCommand('copy');
+      document.body.removeChild(textarea);
+      if (ok) onCopied();
+      else window.alert('無法自動複製，請手動選取號碼複製');
+    };
+
+    if (navigator.clipboard?.writeText) {
+      navigator.clipboard.writeText(text).then(onCopied).catch(fallbackCopy);
+    } else {
+      fallbackCopy();
+    }
   };
 
   // CSV 下載功能
@@ -537,27 +624,6 @@ const PowerLotteryApp = () => {
 
   const poolReady = customPoolA.length >= 6 && customPoolB.length >= 1;
 
-  // 號碼球組件
-  const Ball = ({ num, type, animate, size = 'normal' }) => {
-    const isZoneB = type === 'zoneB';
-    const isSmall = size === 'small';
-
-    let sizeClasses = "w-12 h-12 sm:w-14 sm:h-14 text-lg sm:text-xl"; // Normal
-    if (isSmall) sizeClasses = "w-8 h-8 text-sm"; // Small for stats
-
-    const baseClasses = `${sizeClasses} rounded-full flex items-center justify-center font-bold shadow-lg transform transition-all duration-300`;
-
-    const colorClasses = isZoneB
-      ? "bg-gradient-to-br from-red-500 to-red-700 text-white border-2 border-red-300"
-      : "bg-gradient-to-br from-emerald-400 to-emerald-600 text-white border-2 border-emerald-200";
-
-    return (
-      <div className={`${baseClasses} ${colorClasses} ${animate ? 'scale-110' : 'scale-100'}`}>
-        {num || '?'}
-      </div>
-    );
-  };
-
   return (
     <div className="min-h-screen bg-slate-50 text-slate-800 font-sans selection:bg-emerald-100">
       <div className="max-w-3xl mx-auto px-4 py-8">
@@ -648,7 +714,7 @@ const PowerLotteryApp = () => {
                   ) : (
                     <>
                       <Sparkles className="w-5 h-5 mr-2 group-hover:text-yellow-400 transition-colors" />
-                      立即生成 {generateCount} 組
+                      立即生成 {parseCount(generateCount)} 組
                     </>
                   )}
                 </span>
@@ -807,7 +873,7 @@ const PowerLotteryApp = () => {
                     </>
                   ) : (
                     <>
-                      <Wand2 className="w-5 h-5 mr-2" /> 開始組合 {parseInt(customCount) > 0 ? `${parseInt(customCount)} 組` : ''}
+                      <Wand2 className="w-5 h-5 mr-2" /> 開始組合 {parseCount(customCount)} 組
                     </>
                   )}
                 </button>
